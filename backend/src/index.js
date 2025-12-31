@@ -8,49 +8,43 @@ import path from "path";
 
 const app = express();
 
-/* ================== CONFIG ================== */
-
+/* ===================== CONFIG ===================== */
 const PORT = process.env.PORT || 8080;
-const DATA_DIR = process.env.DATA_DIR || "/data";
-const DATA_FILE = path.join(DATA_DIR, "db.json");
-
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
-const ADMIN_PASS = process.env.ADMIN_PASS || "admin12345";
-const JWT_SECRET = process.env.JWT_SECRET || "change-me";
-const JWT_EXPIRES_IN = "8h";
+const ADMIN_PASS = process.env.ADMIN_PASS || "admin123";
 
-/* ================== MIDDLEWARE ================== */
-
+/* ===================== MIDDLEWARE ===================== */
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 
-/* ================== STORAGE ================== */
+/* ===================== STORAGE ===================== */
+const DATA_DIR = process.env.DATA_DIR || "/tmp";
+const DB_FILE = path.join(DATA_DIR, "db.json");
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(
-    DATA_FILE,
-    JSON.stringify({ users: [] }, null, 2)
-  );
+function ensureDB() {
+  if (!fs.existsSync(DB_FILE)) {
+    fs.writeFileSync(DB_FILE, JSON.stringify({ users: [] }, null, 2));
+  }
 }
+ensureDB();
 
 function readDB() {
-  return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
+  return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
 }
 
 function writeDB(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-/* ================== AUTH ================== */
-
+/* ===================== AUTH HELPERS ===================== */
 function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "8h" });
 }
 
 function requireAdmin(req, res, next) {
-  const token = req.cookies.admin_token;
+  const token = req.cookies?.admin_token;
   if (!token) return res.status(401).json({ error: "unauthorized" });
 
   try {
@@ -61,20 +55,19 @@ function requireAdmin(req, res, next) {
   }
 }
 
-/* ================== ROUTES ================== */
-
-app.get("/health", (_req, res) => {
+/* ===================== HEALTH ===================== */
+app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-/* -------- SIGNUP (PUBLIC) -------- */
+/* ===================== SIGNUP ===================== */
 app.post("/api/signup", (req, res) => {
   const { username, password, email } = req.body;
   if (!username || !password)
     return res.status(400).json({ error: "missing_fields" });
 
   const db = readDB();
-  if (db.users.find(u => u.username === username))
+  if (db.users.find((u) => u.username === username))
     return res.status(409).json({ error: "user_exists" });
 
   const user = {
@@ -82,16 +75,18 @@ app.post("/api/signup", (req, res) => {
     username,
     email: email || "",
     passwordHash: bcrypt.hashSync(password, 10),
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
   };
 
   db.users.push(user);
   writeDB(db);
 
-  res.status(201).json({ user: { id: user.id, username, email } });
+  res.status(201).json({
+    user: { id: user.id, username: user.username, email: user.email },
+  });
 });
 
-/* -------- ADMIN LOGIN -------- */
+/* ===================== ADMIN LOGIN ===================== */
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body;
 
@@ -101,26 +96,25 @@ app.post("/api/auth/login", (req, res) => {
   const token = signToken({ username });
   res.cookie("admin_token", token, {
     httpOnly: true,
-    sameSite: "lax"
+    sameSite: "lax",
   });
 
   res.json({ ok: true });
 });
 
-/* -------- ADMIN ME -------- */
+/* ===================== ADMIN ME ===================== */
 app.get("/api/auth/me", requireAdmin, (req, res) => {
   res.json({ admin: req.admin });
 });
 
-/* -------- ADMIN USERS -------- */
-app.get("/api/admin/users", requireAdmin, (_req, res) => {
+/* ===================== ADMIN USERS ===================== */
+app.get("/api/admin/users", requireAdmin, (req, res) => {
   const db = readDB();
   const users = db.users.map(({ passwordHash, ...u }) => u);
   res.json({ users });
 });
 
-/* ================== START ================== */
-
+/* ===================== START ===================== */
 app.listen(PORT, () => {
   console.log(`Backend running on port ${PORT}`);
 });
