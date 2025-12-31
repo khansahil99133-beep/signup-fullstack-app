@@ -1,0 +1,14 @@
+image: node:20-alpine
+
+pages:
+  stage: deploy
+  script:
+    - cd crick6-stack/frontend
+    - npm ci
+    - VITE_APP_MODE=public VITE_BASE="/$CI_PROJECT_NAME/" VITE_API_BASE="$VITE_API_BASE" npm run build
+    - mv dist ../../public
+  artifacts:
+    paths:
+      - public
+  only:
+    - main
