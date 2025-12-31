@@ -1,25 +1,46 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 
-const DATA_DIR = process.env.DATA_DIR || "/tmp/data";
-const DATA_FILE = path.join(DATA_DIR, "data.json");
+/**
+ * Ensure data directory + data.json exists
+ */
+export function ensureDataFile(dataDir) {
+  const dir = dataDir || "/data";
+  fs.mkdirSync(dir, { recursive: true });
 
-export function ensureDataFile() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  const filePath = path.join(dir, "data.json");
+
+  if (!fs.existsSync(filePath)) {
+    const initialState = {
+      users: [],
+      posts: [],
+      auditLog: [],
+      resetTokens: [],
+      newsletterLog: []
+    };
+    fs.writeFileSync(filePath, JSON.stringify(initialState, null, 2));
   }
 
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: [] }, null, 2));
+  return filePath;
+}
+
+/**
+ * Read JSON state safely
+ */
+export function readState(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    return JSON.parse(raw || "{}");
+  } catch {
+    return {};
   }
 }
 
-export function readState() {
-  ensureDataFile();
-  return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-}
-
-export function writeStateAtomic(state) {
-  ensureDataFile();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+/**
+ * Atomic write (prevents corruption on Render)
+ */
+export function writeStateAtomic(filePath, state) {
+  const tmp = `${filePath}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, filePath);
 }
