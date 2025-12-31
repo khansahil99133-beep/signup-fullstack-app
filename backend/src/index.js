@@ -15,7 +15,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-/* ================= SIMPLE FILE DB ================= */
+/* ================= SIMPLE JSON DB ================= */
 const DATA_DIR = process.env.DATA_DIR || "/tmp";
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
@@ -48,12 +48,13 @@ app.post("/api/auth/signup", async (req, res) => {
   }
 
   const db = readDB();
+
   const exists = db.users.find(
     (u) => u.email === email || u.username === username
   );
 
   if (exists) {
-    return res.status(400).json({ error: "User already exists" });
+    return res.status(409).json({ error: "User already exists" });
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
@@ -69,7 +70,7 @@ app.post("/api/auth/signup", async (req, res) => {
   writeDB(db);
 
   res.status(201).json({
-    message: "User created",
+    message: "Signup successful",
     user: { id: user.id, username, email },
   });
 });
@@ -93,29 +94,10 @@ app.post("/api/auth/login", async (req, res) => {
   const token = jwt.sign(
     { id: user.id, email: user.email },
     JWT_SECRET,
-    { expiresIn: "7d" }
+    { expiresIn: "1d" }
   );
 
   res.json({ token });
-});
-
-/* ================= AUTH MIDDLEWARE ================= */
-function requireAuth(req, res, next) {
-  const auth = req.headers.authorization;
-  if (!auth) return res.status(401).json({ error: "No token" });
-
-  const token = auth.split(" ")[1];
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
-  }
-}
-
-/* ================= ME ================= */
-app.get("/api/auth/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
 });
 
 /* ================= START ================= */
