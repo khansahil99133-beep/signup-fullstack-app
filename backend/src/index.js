@@ -1,197 +1,126 @@
 import express from "express";
 import cors from "cors";
-import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import bcrypt from "bcryptjs";
-import swaggerUi from "swagger-ui-express";
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import multer from "multer";
-
-import { ensureDataFile, readState, writeStateAtomic } from "./storage.js";
-import { cookieOptions, getCookieName, requireAdmin, signAdminJwt } from "./auth.js";
-import { openapi } from "./openapi.js";
-import {
-  validateAdminLogin,
-  validateNewPassword,
-  validateSignup,
-  validateBlogUpsert,
-  validateAdminUserUpdate,
-} from "./validators.js";
+import jwt from "jsonwebtoken";
+import fs from "fs";
+import path from "path";
 
 const app = express();
 
-/* =======================
-   ENV & BASIC SETUP
-======================= */
+/* ================== CONFIG ================== */
 
-if (process.env.TRUST_PROXY === "1" || process.env.NODE_ENV === "production") {
-  app.set("trust proxy", 1);
-}
+const PORT = process.env.PORT || 8080;
+const DATA_DIR = process.env.DATA_DIR || "/data";
+const DATA_FILE = path.join(DATA_DIR, "db.json");
 
-const PORT = Number(process.env.PORT || 8080);
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
 const ADMIN_PASS = process.env.ADMIN_PASS || "admin12345";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me";
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
-const RESERVED_USERNAMES = process.env.RESERVED_USERNAMES || "";
+const JWT_EXPIRES_IN = "8h";
 
-/* =======================
-   STORAGE INIT (FIXED)
-======================= */
+/* ================== MIDDLEWARE ================== */
 
-ensureDataFile(); // ✅ MUST be called once on startup
-
-const DATA_DIR = process.env.DATA_DIR || "/tmp/data";
-const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-/* =======================
-   MIDDLEWARE
-======================= */
-
-const corsOrigins = (process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-if (corsOrigins.length) {
-  app.use(cors({ origin: corsOrigins, credentials: true }));
-}
-
-app.use(morgan("dev"));
-app.use(express.json({ limit: "256kb" }));
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json());
 app.use(cookieParser());
 
-/* =======================
-   FILE UPLOADS
-======================= */
+/* ================== STORAGE ================== */
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || "").toLowerCase() || ".bin";
-      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`);
-    },
-  }),
-  limits: { fileSize: 5 * 1024 * 1024 },
-});
-
-app.use("/uploads", express.static(UPLOADS_DIR));
-
-/* =======================
-   HEALTH
-======================= */
-
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
-/* =======================
-   HELPERS
-======================= */
-
-function publicUser(u) {
-  const { passwordHash, ...rest } = u;
-  return rest;
-}
-
-function normalizeState(state) {
-  return {
-    users: state.users || [],
-    posts: state.posts || [],
-    auditLog: state.auditLog || [],
-    resetTokens: state.resetTokens || [],
-    newsletterLog: state.newsletterLog || [],
-  };
-}
-
-function cryptoRandomId() {
-  return (
-    Date.now().toString(36) +
-    Math.random().toString(36).slice(2, 10)
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(DATA_FILE)) {
+  fs.writeFileSync(
+    DATA_FILE,
+    JSON.stringify({ users: [] }, null, 2)
   );
 }
 
-/* =======================
-   AUTH
-======================= */
+function readDB() {
+  return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
+}
 
-app.post("/api/auth/login", (req, res) => {
-  const v = validateAdminLogin(req.body);
-  if (!v.ok) return res.status(400).json(v);
+function writeDB(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
 
-  if (v.value.username !== ADMIN_USER || v.value.password !== ADMIN_PASS) {
-    return res.status(401).json({ error: "invalid_credentials" });
+/* ================== AUTH ================== */
+
+function signToken(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
+
+function requireAdmin(req, res, next) {
+  const token = req.cookies.admin_token;
+  if (!token) return res.status(401).json({ error: "unauthorized" });
+
+  try {
+    req.admin = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: "invalid_token" });
   }
+}
 
-  const token = signAdminJwt({ username: ADMIN_USER }, JWT_SECRET, JWT_EXPIRES_IN);
-  res.cookie(getCookieName(), token, cookieOptions());
+/* ================== ROUTES ================== */
+
+app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/auth/logout", (_req, res) => {
-  res.clearCookie(getCookieName(), { path: "/" });
-  res.json({ ok: true });
-});
-
-/* =======================
-   SIGNUP
-======================= */
-
+/* -------- SIGNUP (PUBLIC) -------- */
 app.post("/api/signup", (req, res) => {
-  const v = validateSignup(req.body, { reservedUsernames: new Set([ADMIN_USER]) });
-  if (!v.ok) return res.status(400).json(v);
+  const { username, password, email } = req.body;
+  if (!username || !password)
+    return res.status(400).json({ error: "missing_fields" });
 
-  const state = normalizeState(readState());
-
-  if (state.users.some(u => u.username === v.value.username)) {
-    return res.status(409).json({ error: "username_exists" });
-  }
+  const db = readDB();
+  if (db.users.find(u => u.username === username))
+    return res.status(409).json({ error: "user_exists" });
 
   const user = {
-    id: cryptoRandomId(),
-    username: v.value.username,
-    email: v.value.email,
-    passwordHash: bcrypt.hashSync(v.value.password, 10),
-    status: "pending",
-    createdAt: new Date().toISOString(),
+    id: Date.now().toString(),
+    username,
+    email: email || "",
+    passwordHash: bcrypt.hashSync(password, 10),
+    createdAt: new Date().toISOString()
   };
 
-  state.users.unshift(user);
-  writeStateAtomic(state);
+  db.users.push(user);
+  writeDB(db);
 
-  res.status(201).json({ user: publicUser(user) });
+  res.status(201).json({ user: { id: user.id, username, email } });
 });
 
-/* =======================
-   ADMIN USERS
-======================= */
+/* -------- ADMIN LOGIN -------- */
+app.post("/api/auth/login", (req, res) => {
+  const { username, password } = req.body;
 
-app.get("/api/admin/users", requireAdmin({ secret: JWT_SECRET }), (_req, res) => {
-  const state = normalizeState(readState());
-  res.json({ users: state.users.map(publicUser) });
+  if (username !== ADMIN_USER || password !== ADMIN_PASS)
+    return res.status(401).json({ error: "invalid_credentials" });
+
+  const token = signToken({ username });
+  res.cookie("admin_token", token, {
+    httpOnly: true,
+    sameSite: "lax"
+  });
+
+  res.json({ ok: true });
 });
 
-/* =======================
-   API DOCS
-======================= */
-
-app.get("/api/openapi.json", requireAdmin({ secret: JWT_SECRET }), (_req, res) => {
-  res.json(openapi);
+/* -------- ADMIN ME -------- */
+app.get("/api/auth/me", requireAdmin, (req, res) => {
+  res.json({ admin: req.admin });
 });
 
-app.use(
-  "/api/docs",
-  requireAdmin({ secret: JWT_SECRET }),
-  swaggerUi.serve,
-  swaggerUi.setup(openapi),
-);
+/* -------- ADMIN USERS -------- */
+app.get("/api/admin/users", requireAdmin, (_req, res) => {
+  const db = readDB();
+  const users = db.users.map(({ passwordHash, ...u }) => u);
+  res.json({ users });
+});
 
-/* =======================
-   START SERVER
-======================= */
+/* ================== START ================== */
 
 app.listen(PORT, () => {
-  console.log(`✅ Backend running on port ${PORT}`);
+  console.log(`Backend running on port ${PORT}`);
 });
