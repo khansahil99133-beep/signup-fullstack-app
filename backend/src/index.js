@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import cookieParser from "cookie-parser";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import fs from "fs";
@@ -8,18 +7,15 @@ import path from "path";
 
 const app = express();
 
-/* ================= CONFIG ================= */
+/* ===== CONFIG ===== */
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
-const ADMIN_USER = process.env.ADMIN_USER || "admin";
-const ADMIN_PASS = process.env.ADMIN_PASS || "admin123";
 
-/* ================= MIDDLEWARE ================= */
+/* ===== MIDDLEWARE ===== */
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
-app.use(cookieParser());
 
-/* ================= STORAGE ================= */
+/* ===== STORAGE ===== */
 const DATA_DIR = process.env.DATA_DIR || "/tmp";
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
@@ -31,30 +27,56 @@ function ensureDB() {
 
 function readDB() {
   ensureDB();
-  return JSON.parse(fs.readFileSync(DB_FILE));
+  return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
 }
 
 function writeDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-/* ================= AUTH HELPERS ================= */
-function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
-}
+/* ===== HEALTH ===== */
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
 
-function requireAuth(req, res, next) {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: "Unauthorized" });
+/* ===== SIGNUP ===== */
+app.post("/api/signup", async (req, res) => {
+  const { username, password } = req.body;
 
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
+  if (!username || !password) {
+    return res.status(400).json({ error: "Missing fields" });
   }
-}
 
-function requireAdmin(req, res, next) {
-  const token = req.cookies.admin_token;
-  if (!tokenim
+  const db = readDB();
+  if (db.users.find(u => u.username === username)) {
+    return res.status(409).json({ error: "User exists" });
+  }
+
+  const hash = await bcrypt.hash(password, 10);
+  const user = { id: Date.now(), username, password: hash };
+
+  db.users.push(user);
+  writeDB(db);
+
+  res.json({ ok: true });
+});
+
+/* ===== LOGIN ===== */
+app.post("/api/login", async (req, res) => {
+  const { username, password } = req.body;
+
+  const db = readDB();
+  const user = db.users.find(u => u.username === username);
+  if (!user) return res.status(401).json({ error: "Invalid credentials" });
+
+  const ok = await bcrypt.compare(password, user.password);
+  if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+
+  const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "1h" });
+  res.json({ token });
+});
+
+/* ===== START ===== */
+app.listen(PORT, () => {
+  console.log(`Backend running on ${PORT}`);
+});
