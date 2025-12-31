@@ -1,39 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
+import fs from "fs";
+import path from "path";
 
-const DEFAULT_STATE = { users: [], resetTokens: [], auditLog: [], posts: [] };
+// Render-safe writable directory
+const DATA_DIR =
+  process.env.DATA_DIR ||
+  path.join(process.cwd(), "data");
 
-function safeJsonParse(raw) {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+// Ensure directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-export function ensureDataFile(dataDir) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  const filePath = path.join(dataDir, "users.json");
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, JSON.stringify(DEFAULT_STATE, null, 2), "utf8");
-  }
-  return filePath;
-}
-
-export function readState(filePath) {
-  const raw = fs.readFileSync(filePath, "utf8");
-  const parsed = safeJsonParse(raw);
-  if (!parsed || typeof parsed !== "object") return { ...DEFAULT_STATE };
-  if (!Array.isArray(parsed.users)) parsed.users = [];
-  if (!Array.isArray(parsed.resetTokens)) parsed.resetTokens = [];
-  if (!Array.isArray(parsed.auditLog)) parsed.auditLog = [];
-  if (!Array.isArray(parsed.posts)) parsed.posts = [];
-  return parsed;
-}
-
-export function writeStateAtomic(filePath, nextState) {
-  const dir = path.dirname(filePath);
-  const tmp = path.join(dir, `users.json.tmp.${process.pid}.${Date.now()}`);
-  fs.writeFileSync(tmp, JSON.stringify(nextState, null, 2), "utf8");
-  fs.renameSync(tmp, filePath);
-}
+export default DATA_DIR;
