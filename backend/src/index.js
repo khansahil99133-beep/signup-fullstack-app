@@ -24,7 +24,6 @@ const DATA_DIR = process.env.DATA_DIR || "/tmp";
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
 function ensureDB() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify({ users: [] }, null, 2));
   }
@@ -32,7 +31,7 @@ function ensureDB() {
 
 function readDB() {
   ensureDB();
-  return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+  return JSON.parse(fs.readFileSync(DB_FILE));
 }
 
 function writeDB(data) {
@@ -41,101 +40,21 @@ function writeDB(data) {
 
 /* ================= AUTH HELPERS ================= */
 function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: "8h" });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+}
+
+function requireAuth(req, res, next) {
+  const token = req.cookies.token;
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+  }
 }
 
 function requireAdmin(req, res, next) {
   const token = req.cookies.admin_token;
-  if (!token) return res.status(401).json({ error: "unauthorized" });
-
-  try {
-    req.admin = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: "invalid_token" });
-  }
-}
-
-/* ================= HEALTH ================= */
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
-});
-
-/* ================= AUTH ================= */
-
-/**
- * SIGNUP
- * POST /api/signup
- */
-app.post("/api/signup", (req, res) => {
-  const { username, password, email } = req.body;
-  if (!username || !password)
-    return res.status(400).json({ error: "username and password required" });
-
-  const db = readDB();
-  if (db.users.find((u) => u.username === username))
-    return res.status(409).json({ error: "user_exists" });
-
-  const user = {
-    id: Date.now().toString(),
-    username,
-    email,
-    passwordHash: bcrypt.hashSync(password, 10),
-    createdAt: new Date().toISOString(),
-  };
-
-  db.users.push(user);
-  writeDB(db);
-
-  res.status(201).json({ user: { id: user.id, username, email } });
-});
-
-/**
- * LOGIN
- * POST /api/auth/login
- */
-app.post("/api/auth/login", (req, res) => {
-  const { username, password } = req.body;
-
-  if (username !== ADMIN_USER || password !== ADMIN_PASS)
-    return res.status(401).json({ error: "invalid_credentials" });
-
-  const token = signToken({ username });
-  res.cookie("admin_token", token, {
-    httpOnly: true,
-    sameSite: "lax",
-  });
-
-  res.json({ ok: true });
-});
-
-/**
- * ME
- * GET /api/auth/me
- */
-app.get("/api/auth/me", requireAdmin, (req, res) => {
-  res.json({ admin: req.admin });
-});
-
-/**
- * LOGOUT
- * POST /api/auth/logout
- */
-app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie("admin_token");
-  res.json({ ok: true });
-});
-
-/**
- * ADMIN USERS
- * GET /api/admin/users
- */
-app.get("/api/admin/users", requireAdmin, (req, res) => {
-  const db = readDB();
-  res.json({ users: db.users.map(({ passwordHash, ...u }) => u) });
-});
-
-/* ================= START ================= */
-app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
-});
+  if (!tokenim
