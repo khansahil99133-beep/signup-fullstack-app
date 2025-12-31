@@ -7,15 +7,15 @@ import path from "path";
 
 const app = express();
 
-/* ===== CONFIG ===== */
+/* ================= CONFIG ================= */
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
-/* ===== MIDDLEWARE ===== */
+/* ================= MIDDLEWARE ================= */
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-/* ===== STORAGE ===== */
+/* ================= SIMPLE FILE DB ================= */
 const DATA_DIR = process.env.DATA_DIR || "/tmp";
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
@@ -34,49 +34,91 @@ function writeDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-/* ===== HEALTH ===== */
+/* ================= HEALTH ================= */
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-/* ===== SIGNUP ===== */
-app.post("/api/signup", async (req, res) => {
-  const { username, password } = req.body;
+/* ================= SIGNUP ================= */
+app.post("/api/auth/signup", async (req, res) => {
+  const { username, email, password } = req.body;
 
-  if (!username || !password) {
+  if (!username || !email || !password) {
     return res.status(400).json({ error: "Missing fields" });
   }
 
   const db = readDB();
-  if (db.users.find(u => u.username === username)) {
-    return res.status(409).json({ error: "User exists" });
+  const exists = db.users.find(
+    (u) => u.email === email || u.username === username
+  );
+
+  if (exists) {
+    return res.status(400).json({ error: "User already exists" });
   }
 
-  const hash = await bcrypt.hash(password, 10);
-  const user = { id: Date.now(), username, password: hash };
+  const passwordHash = await bcrypt.hash(password, 10);
+
+  const user = {
+    id: Date.now(),
+    username,
+    email,
+    passwordHash,
+  };
 
   db.users.push(user);
   writeDB(db);
 
-  res.json({ ok: true });
+  res.status(201).json({
+    message: "User created",
+    user: { id: user.id, username, email },
+  });
 });
 
-/* ===== LOGIN ===== */
-app.post("/api/login", async (req, res) => {
-  const { username, password } = req.body;
+/* ================= LOGIN ================= */
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password } = req.body;
 
   const db = readDB();
-  const user = db.users.find(u => u.username === username);
-  if (!user) return res.status(401).json({ error: "Invalid credentials" });
+  const user = db.users.find((u) => u.email === email);
 
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+  if (!user) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
 
-  const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "1h" });
+  const ok = await bcrypt.compare(password, user.passwordHash);
+  if (!ok) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  const token = jwt.sign(
+    { id: user.id, email: user.email },
+    JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
   res.json({ token });
 });
 
-/* ===== START ===== */
+/* ================= AUTH MIDDLEWARE ================= */
+function requireAuth(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: "No token" });
+
+  const token = auth.split(" ")[1];
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+/* ================= ME ================= */
+app.get("/api/auth/me", requireAuth, (req, res) => {
+  res.json({ user: req.user });
+});
+
+/* ================= START ================= */
 app.listen(PORT, () => {
-  console.log(`Backend running on ${PORT}`);
+  console.log(`Backend running on port ${PORT}`);
 });
